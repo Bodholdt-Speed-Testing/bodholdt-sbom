@@ -1,0 +1,14 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Composer entry point.
+ *
+ * The tool is deliberately one file you can download and run with no install at
+ * all. This shim exists only so that `composer require --dev bodholdt/sbom`
+ * puts a sensibly named executable in vendor/bin.
+ *
+ * @package BodholdtSBOM
+ * @license GPL-2.0-or-later
+ */
+
+require __DIR__ . '/../bodholdt-sbom.php';

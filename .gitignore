@@ -1,0 +1,11 @@
+# Composer installs nothing for this project, but a consumer's tree might.
+/vendor/
+
+# A library does not commit its lock file.
+composer.lock
+
+# Generated bills of materials, which are build output, not source.
+*.sbom.json
+/build/
+
+.DS_Store

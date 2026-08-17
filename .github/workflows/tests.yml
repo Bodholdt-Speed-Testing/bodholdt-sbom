@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README promises 7.4 and up. This matrix is what makes that a
+        # tested claim rather than an assumption: the tool is developed on a
+        # much newer PHP, which cannot catch a 7.4 incompatibility on its own.
+        php: [ '7.4', '8.0', '8.1', '8.2', '8.3', '8.4' ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          ini-values: error_reporting=E_ALL, display_errors=On
+
+      - name: Lint every PHP file
+        run: |
+          find . -name '*.php' -not -path './vendor/*' -print0 \
+            | xargs -0 -n1 php -l
+
+      - name: Run the fixture tests
+        run: php tests/run-tests.php
+
+      - name: Scan itself, which must not fatal
+        run: php bodholdt-sbom.php . > /dev/null
+
+      - name: Composer entry point resolves
+        run: php bin/bodholdt-sbom --help > /dev/null

@@ -1,0 +1,40 @@
+{
+    "name": "bodholdt/sbom",
+    "description": "A software bill of materials for a WordPress plugin or theme, including the copied-in libraries that no lockfile records.",
+    "type": "library",
+    "license": "GPL-2.0-or-later",
+    "homepage": "https://bodholdtlabs.com",
+    "keywords": [
+        "wordpress",
+        "sbom",
+        "cyclonedx",
+        "cra",
+        "cyber-resilience-act",
+        "supply-chain",
+        "dependencies",
+        "plugin",
+        "theme"
+    ],
+    "authors": [
+        {
+            "name": "Kyle Bodholdt",
+            "homepage": "https://bodholdtlabs.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/Bodholdt-Speed-Testing/bodholdt-sbom/issues",
+        "source": "https://github.com/Bodholdt-Speed-Testing/bodholdt-sbom"
+    },
+    "require": {
+        "php": ">=7.4"
+    },
+    "bin": [
+        "bin/bodholdt-sbom"
+    ],
+    "scripts": {
+        "test": "php tests/run-tests.php"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
