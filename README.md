@@ -1,7 +1,8 @@
 # Bodholdt SBOM
 
-> **All 22 high severity findings from the pre-publication review are fixed in 1.1.0.**
-> 26 medium and 5 low remain open, listed in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+> **All 53 findings from the pre-publication review are resolved as of 1.2.0.**
+> The reasoning is kept in [KNOWN_ISSUES.md](KNOWN_ISSUES.md), because how the tool got things
+> wrong is more useful than the list.
 
 A software bill of materials for a WordPress plugin or theme.
 
@@ -87,19 +88,23 @@ The most useful place to run it is in your build, on the staged output, just bef
 ## What the output looks like
 
 ```
-NOT IDENTIFIED (1)
-  Third party code is present here and this tool could not attribute
-  it. This is the list that matters. You cannot report a vulnerability
-  in a component you cannot name.
+PARTIALLY IDENTIFIED (1)
+  Found and named, but something is inferred or missing. A version
+  read out of source code is a good guess, not a declaration, and it
+  is recorded here rather than above.
 
   stripe-php                         19.0.0
                                      MIT
                                      stripe-php
-                                     vendored, version read from stripe-php/lib/Stripe.php
+                                     vendored, version inferred from stripe-php/lib/Stripe.php, unverified
 ```
 
 That library has no `composer.json`, is not in any lockfile, and its version exists only as a
 constant in one file inside it. A tool that reads manifests reports nothing at all here.
+
+Note where it lands. The name came from a directory and the version from reading source, so it is
+**partially** identified, and the evidence line says "unverified". Filing a good guess under "name
+and version both known" would tell you that you can answer a question you cannot yet answer.
 
 ## The CycloneDX output
 

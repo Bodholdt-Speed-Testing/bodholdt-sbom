@@ -2,6 +2,57 @@
 
 All notable changes to this project are recorded here.
 
+## 1.2.0
+
+Closes the remaining 26 medium findings from the pre-publication review. With the 5 low findings
+already resolved by the 1.1.0 round, **all 53 confirmed findings are now closed.**
+
+**Reads the banner shapes real files actually use.** The pattern only matched `/*! Name vX.Y` with
+nothing between, which excluded the standard multi-line JSDoc banner, since its name line begins
+with ` * `, and excluded any product name longer than two words. Banners are now read from the whole
+leading comment block with the comment furniture stripped. The two guards that stop this inventing
+components are kept and strengthened: the block must still be the first thing in the file, and every
+word of a captured name is checked against the changelog and build vocabulary rather than the joined
+string, which is how `Fixed in 2.1.0` was still getting through.
+
+**Stops guessing about a minified file with a twin beside it.** A same-directory pair is how a
+downloaded dist folder looks, and equally how a plugin shipping both files for `SCRIPT_DEBUG` looks.
+Rather than assume either, the tool asks the twin: a vendored library's unminified file nearly
+always carries a banner, so when it does the pair is identified from it, and when it does not the
+ambiguity is reported and nothing is asserted. A source in a separate tree, such as `src/`, remains
+proof of an author's own build.
+
+**Stops accusing packages their author declared.** Some names on the dev-tooling list have
+legitimate runtime uses. A package listed under `packages` in `composer.lock` was declared a
+production requirement deliberately, so it now gets a note asking for confirmation instead of a
+should-not-ship flag. An unexplained presence in a vendor tree still earns the flag.
+
+**Picks the right plugin header.** With several files declaring a `Plugin Name`, `glob()` is
+alphabetical and `-` sorts before `.`, so `my-plugin-legacy.php` became the subject of the whole
+document. The file named after the directory now wins, then the shortest name, and the rejected
+candidates are named in the notes.
+
+**Tells an own sub-package from a dependency.** A directory carrying its own manifest was admitted
+outright, so a monorepo-style plugin's `blocks/` and any directory an author dropped a copy of the
+GPL into were reported as dependencies. A manifest naming the same vendor as the root is now
+understood as the author's own, with the reasoning stated.
+
+**Inventories what is not JavaScript.** Bundled fonts, grouped by the directory holding them, and
+WebAssembly modules. Both are third party essentially by definition and carry their own licences,
+and the asset walk could not see either.
+
+**Also:** a package physically present under a shipping `node_modules` is reported as shipped
+whatever the lockfile's dev flag says about how it was installed; Composer's own `vendor/composer`
+bookkeeping directory is no longer reported as a package; and the README's sample output shows the
+section the tool actually prints.
+
+Two regressions were introduced by this round and caught by running against real plugins rather
+than fixtures: the widened banner pattern picked up a banner on the author's own file, and
+Composer's internals became a component. Both are fixed and both have tests. Fixtures confirm what
+you thought of; real code finds what you did not.
+
+82 fixture tests, up from 65.
+
 ## 1.1.0
 
 Closes all 22 high severity findings from the pre-publication review. See `KNOWN_ISSUES.md` for the

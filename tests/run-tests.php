@@ -342,22 +342,41 @@ ok(
 
 heading( 'Shipping hygiene' );
 
+// An unexplained presence in a vendor tree earns the accusation.
 $dir = fixture(
-	'dev-tooling-shipped',
+	'dev-tooling-unexplained',
 	array(
-		'my-plugin.php' => plugin_header(),
-		'composer.lock' => json_encode( array( 'packages' => array( array( 'name' => 'phpunit/phpunit', 'version' => '10.5.0' ) ) ) ),
+		'my-plugin.php'                  => plugin_header(),
+		'vendor/composer/installed.json' => json_encode( array( 'packages' => array( array( 'name' => 'phpunit/phpunit', 'version' => '10.5.0' ) ) ) ),
 	)
 );
 $doc = scan( $dir );
 ok(
 	'should-not-ship' === prop( component( $doc, 'phpunit/phpunit' ), 'bodholdt:scope' ),
-	'test tooling in runtime scope is flagged'
+	'test tooling sitting in a vendor tree with nothing marking it dev is flagged'
 );
 ok(
 	false !== strpos( scan_text( $dir ), 'SHOULD NOT SHIP' ),
 	'and the text report says so prominently'
 );
+
+heading( 'REVIEW: a declared production requirement gets a question, not an accusation' );
+// Some packages on the dev-tooling list have legitimate runtime uses. An
+// explicit declaration in composer.lock's production section is the author
+// saying so, and answering that with should-not-ship was calling them wrong.
+
+$dir = fixture(
+	'dev-tooling-declared',
+	array(
+		'my-plugin.php' => plugin_header(),
+		'composer.lock' => json_encode( array( 'packages' => array( array( 'name' => 'sebastian/diff', 'version' => '5.1.1' ) ) ) ),
+	)
+);
+$doc  = scan( $dir );
+$text = scan_text( $dir );
+ok( 'shipped' === prop( component( $doc, 'sebastian/diff' ), 'bodholdt:scope' ), 'a declared production requirement is not accused' );
+ok( false === strpos( $text, 'SHOULD NOT SHIP' ), 'no should-not-ship section is printed' );
+ok( false !== strpos( $text, 'usually a test dependency' ), 'but it is still raised as a question in the notes' );
 
 /* --- Robustness ------------------------------------------------------ */
 
@@ -613,6 +632,129 @@ ok(
 	! array_key_exists( 'version', $doc['metadata']['component'] ) || null !== $doc['metadata']['component']['version'],
 	'no component carries a fabricated "unknown" version'
 );
+
+heading( 'REVIEW: banner shapes real dist files actually use' );
+
+$dir = fixture(
+	'multiline-banner',
+	array(
+		'my-plugin.php'     => plugin_header(),
+		'assets/chart.js'   => "/**\n * Awesome Chart Library v3.4.5\n * (c) somebody\n */\n" . minified_blob(),
+	)
+);
+$doc = scan( $dir );
+$c   = component( $doc, 'Awesome Chart Library' );
+ok( null !== $c, 'a multi-line JSDoc banner with a three word name is read' );
+ok( ( $c['version'] ?? null ) === '3.4.5', 'and its version comes with it' );
+
+$dir = fixture(
+	'two-word-stopword',
+	array(
+		'my-plugin.php'   => plugin_header(),
+		'assets/a.js'     => "/*! Fixed in 2.1.0 - some note */\n" . minified_blob(),
+	)
+);
+$doc = scan( $dir );
+ok( null === component( $doc, 'Fixed in' ), 'a stopword in either word of a two word capture still suppresses it' );
+
+$dir = fixture(
+	'own-banner',
+	array(
+		'my-plugin.php'    => "<?php\n/**\n * Plugin Name: Acme Widgets\n * Text Domain: acme-widgets\n * Version: 1.0.0\n */\n",
+		'assets/edge.js'   => "// acme-widgets-edge v3.8\n// changes from v3.7\n" . minified_blob(),
+	)
+);
+$doc = scan( $dir );
+ok( null === component( $doc, 'acme-widgets-edge' ), 'a banner naming the product itself is the author labelling their own file' );
+
+heading( 'REVIEW: a same-directory minified twin is ambiguous, not proof either way' );
+
+$dir = fixture(
+	'dist-pair-with-banner',
+	array(
+		'my-plugin.php'                  => plugin_header(),
+		'assets/vendorlib/chart.js'      => "/*! Chart.js v4.4.1 | MIT */\nfunction chart(){}\n",
+		'assets/vendorlib/chart.min.js'  => minified_blob(),
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'Chart.js' ), 'a vendored dist pair is identified from the twin\'s banner' );
+
+$dir = fixture(
+	'dist-pair-no-banner',
+	array(
+		'my-plugin.php'          => plugin_header(),
+		'assets/thing.js'        => "function thing(){}\n",
+		'assets/thing.min.js'    => minified_blob(),
+	)
+);
+$doc = scan( $dir );
+ok( count( $doc['components'] ) === 0, 'an unbannered same-directory pair is not asserted either way' );
+// The report word-wraps its notes, so assert on a phrase short enough to
+// survive wrapping rather than on a sentence that will be split.
+ok( false !== strpos( scan_text( $dir ), 'not classified' ), 'and the ambiguity is reported rather than hidden' );
+
+heading( 'REVIEW: the right plugin header becomes the subject' );
+
+$dir = fixture(
+	'my-plugin',
+	array(
+		'my-plugin.php'        => plugin_header( 'My Plugin', '2.0.0' ) . "\n// more code\n",
+		'my-plugin-legacy.php' => plugin_header( 'LEGACY LOADER', '0.1.0' ),
+	)
+);
+$doc = scan( $dir );
+ok(
+	( $doc['metadata']['component']['name'] ?? null ) === 'My Plugin',
+	'a -legacy companion file does not become the subject',
+	'got: ' . ( $doc['metadata']['component']['name'] ?? 'null' )
+);
+ok( false !== strpos( scan_text( $dir ), 'LEGACY LOADER' ), 'and the rejected candidate is named in the notes' );
+
+heading( 'REVIEW: an own sub-package is not a dependency' );
+
+$dir = fixture(
+	'monorepo',
+	array(
+		'my-plugin.php'          => plugin_header(),
+		'composer.json'          => '{"name":"myvendor/my-plugin"}',
+		'blocks/composer.json'   => '{"name":"myvendor/blocks"}',
+		'blocks/LICENSE'         => "GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n",
+		'blocks/Thing.php'       => "<?php\nnamespace Whatever;\nclass Thing {}\n",
+	)
+);
+$doc = scan( $dir );
+ok( null === component( $doc, 'myvendor/blocks' ), 'a sub-package sharing the root vendor prefix is not a dependency' );
+ok( false !== strpos( scan_text( $dir ), 'your own sub-package' ), 'and the reasoning is stated' );
+
+heading( 'REVIEW: shipped artifacts that are not JavaScript' );
+
+$dir = fixture(
+	'binary-artifacts',
+	array(
+		'my-plugin.php'              => plugin_header(),
+		'assets/fonts/inter.woff2'   => "\x77OF2 not really a font",
+		'assets/fonts/inter-b.woff2' => "\x77OF2 not really a font",
+		'assets/engine.wasm'         => "\x00asm not really wasm",
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'fonts' ), 'bundled fonts are inventoried, grouped by directory' );
+ok( null !== component( $doc, 'engine.wasm' ), 'a WebAssembly module is inventoried' );
+
+heading( 'REVIEW: composer\'s own bookkeeping directory is not a package' );
+
+$dir = fixture(
+	'composer-internals',
+	array(
+		'my-plugin.php'                     => plugin_header(),
+		'vendor/composer/installed.json'    => json_encode( array( 'packages' => array( array( 'name' => 'acme/http', 'version' => '1.0.0' ) ) ) ),
+		'vendor/composer/ClassLoader.php'   => "<?php\nnamespace Composer\\Autoload;\nclass ClassLoader {}\n",
+		'vendor/acme/http/Client.php'       => "<?php\nnamespace Acme;\nclass Client {}\n",
+	)
+);
+$doc = scan( $dir );
+ok( null === component( $doc, 'composer' ), 'vendor/composer is not reported as a component' );
 
 /* --- Document shape --------------------------------------------------- */
 

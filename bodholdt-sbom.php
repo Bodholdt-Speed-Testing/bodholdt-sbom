@@ -38,7 +38,7 @@ declare( strict_types = 1 );
 
 namespace Bodholdt\SBOM;
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // A document written to stdout must never have a PHP diagnostic interleaved
 // into it. CLI PHP defaults display_errors to STDOUT, which would put a warning
@@ -132,12 +132,21 @@ final class Scanner {
 		'phpspec/prophecy', 'yoast/phpunit-polyfills', 'dealerdirect/phpcodesniffer-composer-installer',
 	);
 
-	/** Words that appear in ordinary source comments and are not package names. */
+	/**
+	 * Words that appear in ordinary source comments and are not package names.
+	 *
+	 * Tested against every word of a captured name, not the joined string:
+	 * "fixed" was already here, and "Fixed in 2.1.0" still slipped through
+	 * because the two-word capture was checked as one.
+	 */
 	private const BANNER_STOPWORDS = array(
-		'new', 'version', 'updated', 'added', 'fixed', 'changed', 'since', 'note',
-		'todo', 'deprecated', 'see', 'requires', 'style', 'styles', 'theme', 'admin',
-		'copyright', 'license', 'licence', 'generated', 'compiled', 'built', 'bundle',
-		'do', 'this', 'the', 'for', 'and', 'all', 'part', 'based',
+		'new', 'version', 'updated', 'update', 'added', 'fixed', 'changed', 'since',
+		'note', 'notes', 'todo', 'deprecated', 'see', 'requires', 'required',
+		'style', 'styles', 'theme', 'admin', 'copyright', 'license', 'licence',
+		'generated', 'compiled', 'built', 'build', 'bundle', 'bundled', 'release',
+		'released', 'minified', 'custom', 'core', 'reset', 'base', 'main', 'part',
+		'based', 'this', 'that', 'the', 'for', 'and', 'all', 'with', 'from', 'file',
+		'created', 'modified', 'author', 'package', 'module', 'component',
 	);
 
 	/**
@@ -182,6 +191,7 @@ final class Scanner {
 		$this->detect_vendored_php( $containers );
 		$this->detect_single_file_libraries();
 		$this->detect_bundled_assets();
+		$this->detect_binary_artifacts();
 		$this->detect_shipping_hygiene();
 
 		return array(
@@ -396,19 +406,43 @@ final class Scanner {
 		}
 
 		if ( count( $headers ) > 1 ) {
-			// glob() is alphabetical, and '-' sorts before '.', so a file such
-			// as my-plugin-legacy.php would silently beat my-plugin.php and
-			// become the subject of the whole document.
-			$names = array();
-			foreach ( $headers as $h ) {
-				$names[] = basename( $h['file'] );
+			// glob() is alphabetical and '-' sorts before '.', so a file such as
+			// my-plugin-legacy.php beat my-plugin.php and became the subject of
+			// the whole document. Prefer the file named after the directory,
+			// then the largest, which is what the main file almost always is.
+			$dir_stem = $this->stem( basename( $this->root ) );
+
+			usort(
+				$headers,
+				function ( array $a, array $b ) use ( $dir_stem ) {
+					$exact = function ( array $h ) use ( $dir_stem ) {
+						return $this->stem( basename( $h['file'], '.php' ) ) === $dir_stem ? 0 : 1;
+					};
+					$cmp = $exact( $a ) <=> $exact( $b );
+					if ( 0 !== $cmp ) {
+						return $cmp;
+					}
+					// Then the shortest name. A companion file is conventionally
+					// the main file's name with something appended, so
+					// my-plugin.php beats my-plugin-legacy.php.
+					$cmp = strlen( basename( $a['file'] ) ) <=> strlen( basename( $b['file'] ) );
+					if ( 0 !== $cmp ) {
+						return $cmp;
+					}
+					return (int) @filesize( $b['file'] ) <=> (int) @filesize( $a['file'] );
+				}
+			);
+
+			$rejected = array();
+			foreach ( array_slice( $headers, 1 ) as $h ) {
+				$rejected[] = basename( $h['file'] ) . ' ("' . $h['name'] . '")';
 			}
 			$this->note(
 				sprintf(
-					'More than one file at the top level declares a Plugin Name (%s). This report describes "%s" from %s. If that is the wrong one, point the tool at the right directory or check for a stray file.',
-					implode( ', ', $names ),
+					'More than one file at the top level declares a Plugin Name. This report describes "%s" from %s. Also found: %s. If the wrong one was chosen, point the tool at the right directory.',
 					$headers[0]['name'],
-					basename( $headers[0]['file'] )
+					basename( $headers[0]['file'] ),
+					implode( ', ', $rejected )
 				)
 			);
 		}
@@ -513,8 +547,19 @@ final class Scanner {
 					$c->purl       = $c->version ? 'pkg:composer/' . $name . '@' . $c->version : null;
 					$c->evidence   = 'composer.lock (' . $section . ')';
 
+					// A package listed under "packages" was declared a production
+					// requirement by the author. Some of these are ordinarily
+					// test tooling but have legitimate runtime uses, so an
+					// explicit declaration is answered with a question, not an
+					// accusation. Only an unexplained presence in a vendor tree
+					// earns should-not-ship.
 					if ( SHIPPED === $scope && in_array( strtolower( $name ), self::DEV_TOOLING, true ) ) {
-						$c->scope = SUSPICION;
+						$this->note(
+							sprintf(
+								'%s is usually a test dependency, and here it is declared as a production requirement in composer.lock. That may well be deliberate. Confirm it is meant to ship.',
+								$name
+							)
+						);
 					}
 					$this->add( $c );
 				}
@@ -575,6 +620,15 @@ final class Scanner {
 					$c->path       = $dir;
 					$c->purl       = $c->version ? $this->npm_purl( $name, $c->version ) : null;
 					$c->evidence   = 'package-lock.json';
+
+					// If the package is physically present in a node_modules
+					// that is part of this tree, it ships, whatever the
+					// lockfile's dev flag says about how it was installed.
+					if ( $ships && is_dir( dirname( $lock_path ) . '/' . $rel_path ) ) {
+						$c->scope    = SHIPPED;
+						$c->evidence = 'package-lock.json, and present on disk under node_modules';
+					}
+
 					$this->add( $c );
 				}
 			} else {
@@ -668,6 +722,11 @@ final class Scanner {
 		// separate packages, so this runs first and claims them individually.
 		foreach ( $containers as $container ) {
 			foreach ( glob( $this->esc( $container ) . '/*', GLOB_ONLYDIR ) ?: array() as $publisher ) {
+				// vendor/composer is the installer's own bookkeeping, not a
+				// package. It holds PHP, so nothing else here excludes it.
+				if ( 'composer' === strtolower( basename( $publisher ) ) ) {
+					continue;
+				}
 				$packages = glob( $this->esc( $publisher ) . '/*', GLOB_ONLYDIR ) ?: array();
 				foreach ( $packages ?: array( $publisher ) as $pkg_dir ) {
 					if ( $this->is_claimed( $pkg_dir ) ) {
@@ -720,12 +779,26 @@ final class Scanner {
 
 			$has_manifest = $this->has_license_file( $dir ) || is_file( $dir . '/composer.json' );
 
+			// A manifest is not by itself proof of somebody else's code. A
+			// monorepo-style plugin gives its own sub-packages a composer.json,
+			// and authors drop a copy of the GPL into directories they publish
+			// separately. When the manifest names the SAME vendor as the root,
+			// it is the author's own sub-package.
+			if ( $has_manifest && $this->shares_vendor_with_root( $dir ) ) {
+				$this->note(
+					sprintf(
+						'%s carries its own manifest but names the same vendor as this project, so it is treated as your own sub-package rather than a dependency.',
+						$this->rel( $dir )
+					)
+				);
+				continue;
+			}
+
 			// Without a manifest, the only thing separating a copied-in library
 			// from one of the author's own directories is whose names are in
 			// the code. Getting this wrong in one direction invents a
-			// dependency; in the other it hides one. So a manifest admits it
-			// outright, and otherwise it needs positive evidence of being
-			// somebody else's.
+			// dependency; in the other it hides one. So a manifest admits it,
+			// and otherwise it needs positive evidence of being somebody else's.
 			if ( ! $has_manifest && ! $this->looks_third_party( $dir ) ) {
 				continue;
 			}
@@ -755,6 +828,31 @@ final class Scanner {
 			$dir = $children[0];
 		}
 		return $dir;
+	}
+
+	/**
+	 * Does this directory's composer.json name the same vendor as the root's?
+	 *
+	 * "acme/plugin" at the root and "acme/blocks" here means one project in two
+	 * folders, not a dependency. Falls back to comparing the product's own
+	 * identity tokens when the root has no composer.json.
+	 */
+	private function shares_vendor_with_root( string $dir ): bool {
+		$mine = $this->read_json( $dir . '/composer.json' );
+		if ( ! is_array( $mine ) || ! isset( $mine['name'] ) ) {
+			return false;
+		}
+		$my_vendor = strtolower( (string) strtok( (string) $mine['name'], '/' ) );
+		if ( '' === $my_vendor ) {
+			return false;
+		}
+
+		$root = $this->read_json( $this->root . '/composer.json' );
+		if ( is_array( $root ) && isset( $root['name'] ) ) {
+			return $my_vendor === strtolower( (string) strtok( (string) $root['name'], '/' ) );
+		}
+
+		return (bool) array_intersect( $this->identity, $this->tokens( $my_vendor ) );
 	}
 
 	private function inside_container( string $dir, array $containers ): bool {
@@ -1172,19 +1270,22 @@ final class Scanner {
 			);
 		}
 
-		// A conventional preserved banner opens the file and is the strongest
-		// evidence available. It is tested FIRST: a CDN reference further down
-		// the same file used to override it and erase the real package.
-		if ( '' !== $leading && preg_match( '#^\s*/\*!\s*([A-Za-z][A-Za-z0-9._\-]{1,30}(?:[ ][A-Za-z0-9._\-]{1,20})?)[\s,|]+v?([0-9]+\.[0-9]+[0-9A-Za-z.\-+]*)#', $leading, $m ) ) {
-			$name = trim( $m[1] );
-			if ( ! $this->is_stopword_name( $name ) ) {
-				$c             = new Component( $name );
-				$c->version    = $m[2];
-				$c->confidence = IDENTIFIED;
-				$c->path       = $this->rel( $file );
-				$c->evidence   = 'preserved banner in ' . basename( $file );
-				return $c;
-			}
+		// A conventional banner opens the file and is the strongest evidence
+		// available. It is tested FIRST: a CDN reference further down the same
+		// file used to override it and erase the real package.
+		$banner = $this->banner_from( $leading );
+		// A banner naming the product itself is the author labelling their own
+		// file, which widening the banner pattern started picking up.
+		if ( null !== $banner && array_intersect( $this->identity, $this->tokens( $banner['name'] ) ) ) {
+			$banner = null;
+		}
+		if ( null !== $banner ) {
+			$c             = new Component( $banner['name'] );
+			$c->version    = $banner['version'];
+			$c->confidence = IDENTIFIED;
+			$c->path       = $this->rel( $file );
+			$c->evidence   = 'banner in ' . basename( $file );
+			return $c;
 		}
 
 		// A CDN rewrite header, which names the package authoritatively. It has
@@ -1203,14 +1304,91 @@ final class Scanner {
 		// Machine-generated bundles carry no banner and are often not named
 		// .min. at all: the standard block build emits build/index.js.
 		if ( $this->looks_minified( $file ) ) {
-			if ( null !== $this->find_source_for( $file ) ) {
-				return null; // Built from a source in this tree, so the author's own.
+			$source = $this->find_source_for( $file );
+
+			if ( null !== $source ) {
+				// A source in a separate tree (src/, resources/) is a build
+				// pipeline, so this is the author's own output.
+				if ( dirname( $source ) !== dirname( $file ) ) {
+					return null;
+				}
+
+				// A same-directory twin is genuinely ambiguous: it is how a
+				// downloaded dist folder looks, and it is also how a plugin
+				// shipping both files for SCRIPT_DEBUG looks. So ask the twin.
+				// A vendored library's unminified file nearly always carries a
+				// banner; an author's rarely does.
+				$twin = $this->banner_from( $this->leading_comment( $this->head( $source, 4096 ) ) );
+				if ( null !== $twin ) {
+					$c             = new Component( $twin['name'] );
+					$c->version    = $twin['version'];
+					$c->confidence = IDENTIFIED;
+					$c->path       = $this->rel( $file );
+					$c->evidence   = 'banner in its unminified twin ' . basename( $source );
+					return $c;
+				}
+
+				$this->note(
+					sprintf(
+						'%s ships beside its own unminified twin with no banner on either. That is how a downloaded library looks and also how a plugin shipping both files looks, so it is not classified either way. Check it by hand.',
+						$this->rel( $file )
+					)
+				);
+				return null;
 			}
+
 			$c             = new Component( basename( $file ) );
 			$c->confidence = UNIDENTIFIED;
 			$c->path       = $this->rel( $file );
 			$c->evidence   = 'machine generated bundle with no banner and no source in this tree';
 			return $c;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Read a library name and version out of an opening comment block.
+	 *
+	 * Works on the block rather than on the first token, because the shape most
+	 * real dist files actually use is a multi-line JSDoc comment whose name line
+	 * begins with " * ", and product names of three or four words are ordinary.
+	 * Matching only "/*! Name vX.Y" missed both.
+	 *
+	 * The two things that stop this inventing components are kept: the block has
+	 * to be the first thing in the file, and every word of the captured name is
+	 * checked against the changelog and build vocabulary. Those are what caught
+	 * "NEW in 10.15.0", and neither depends on the pattern being narrow.
+	 */
+	private function banner_from( string $comment ): ?array {
+		if ( '' === $comment ) {
+			return null;
+		}
+
+		// Strip comment furniture so a leading " * " cannot break the match.
+		$lines = array();
+		foreach ( preg_split( '/\R/', $comment ) ?: array() as $line ) {
+			$line = (string) preg_replace( '#^\s*(?:/\*+!?|\*+/?|//+!?)\s?#', '', $line );
+			$line = trim( (string) preg_replace( '#\*+/\s*$#', '', $line ) );
+			if ( '' !== $line ) {
+				$lines[] = $line;
+			}
+		}
+		if ( ! $lines ) {
+			return null;
+		}
+
+		// Only the first few lines can carry the identity. Further down is
+		// licence text and copyright, which name other things.
+		foreach ( array_slice( $lines, 0, 3 ) as $line ) {
+			if ( ! preg_match( '#^([A-Za-z][A-Za-z0-9._\-]*(?:[ ][A-Za-z][A-Za-z0-9._\-]*){0,3})[\s,|-]+v?([0-9]+\.[0-9]+[0-9A-Za-z.\-+]*)#', $line, $m ) ) {
+				continue;
+			}
+			$name = trim( $m[1], " \t-,|" );
+			if ( '' === $name || $this->is_stopword_name( $name ) ) {
+				continue;
+			}
+			return array( 'name' => $name, 'version' => $m[2] );
 		}
 
 		return null;
@@ -1300,6 +1478,52 @@ final class Scanner {
 			if ( '' !== $key ) {
 				$this->stem_index[ $key ][] = $path;
 			}
+		}
+	}
+
+	/**
+	 * Shipped artifacts that are not source and not JavaScript.
+	 *
+	 * Fonts and WebAssembly are third party essentially by definition, carry
+	 * their own licence obligations, and were invisible because the asset walk
+	 * only looked at .js and .css. Fonts are grouped by the directory holding
+	 * them, since a family is a dozen files and a dozen rows would be noise.
+	 */
+	private function detect_binary_artifacts(): void {
+		$font_dirs = array();
+
+		foreach ( $this->walk( $this->root ) as $file ) {
+			if ( false !== strpos( $file, '/node_modules/' ) || $this->is_claimed( dirname( $file ) ) ) {
+				continue;
+			}
+
+			if ( preg_match( '/\.(woff2?|ttf|otf|eot)$/i', $file ) ) {
+				$font_dirs[ dirname( $file ) ][] = basename( $file );
+				continue;
+			}
+
+			if ( preg_match( '/\.wasm$/i', $file ) ) {
+				$c             = new Component( basename( $file ) );
+				$c->confidence = UNIDENTIFIED;
+				$c->path       = $this->rel( $file );
+				$c->evidence   = 'compiled WebAssembly module, which cannot have been written here';
+				$this->add( $c );
+			}
+		}
+
+		foreach ( $font_dirs as $dir => $files ) {
+			$base  = basename( $dir );
+			$label = false !== stripos( $base, 'font' ) ? $base : $base . ' (fonts)';
+
+			$c             = new Component( $label );
+			$c->confidence = UNIDENTIFIED;
+			$c->path       = $this->rel( $dir );
+			$c->evidence   = sprintf(
+				'%d bundled font file%s. Fonts carry their own licence, and it is rarely the same as your plugin\'s',
+				count( $files ),
+				1 === count( $files ) ? '' : 's'
+			);
+			$this->add( $c );
 		}
 	}
 
