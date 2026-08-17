@@ -1,15 +1,7 @@
 # Bodholdt SBOM
 
-> **Not ready to publish. Read [KNOWN_ISSUES.md](KNOWN_ISSUES.md) first.**
->
-> A pre-publication review raised 56 findings against 1.0.0 and 53 survived an adversarial attempt
-> to refute them, 22 of them high severity. Two of those undercut claims made below: the tool can
-> only find copied-in libraries that kept a `LICENSE` file or a `composer.json`, and only one level
-> below the root, so it misses much of the code this page says it exists to find. It also currently
-> reports a package as present when a file merely mentions that package's CDN URL.
->
-> The claims on this page describe the intended product. Until the high severity items are closed,
-> treat them as intent rather than as description.
+> **All 22 high severity findings from the pre-publication review are fixed in 1.1.0.**
+> 26 medium and 5 low remain open, listed in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 A software bill of materials for a WordPress plugin or theme.
 

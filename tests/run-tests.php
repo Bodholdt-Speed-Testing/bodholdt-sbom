@@ -81,13 +81,19 @@ function component( array $doc, string $name ): ?array {
 	return null;
 }
 
-function prop( array $component, string $key ): ?string {
-	foreach ( $component['properties'] ?? array() as $p ) {
+function prop( ?array $component, string $key ): ?string {
+	foreach ( ( $component['properties'] ?? array() ) as $p ) {
 		if ( $p['name'] === $key ) {
 			return $p['value'];
 		}
 	}
 	return null;
+}
+
+/** A realistic machine-generated bundle: one very long line, no newlines. */
+function minified_blob( int $bytes = 4096 ): string {
+	$chunk = '!function(e,t){var n=e.x||{};n.a=function(r){return r+1};n.b=function(r){return r*2};';
+	return str_repeat( $chunk, (int) ceil( $bytes / strlen( $chunk ) ) ) . "\n";
 }
 
 function ok( bool $condition, string $label, string $detail = '' ): void {
@@ -164,8 +170,10 @@ $c   = component( $doc, 'acme-sdk' );
 ok( null !== $c, 'finds a library that appears in no lockfile' );
 ok( ( $c['version'] ?? null ) === '19.0.0', 'reads its version from a class constant', 'got: ' . ( $c['version'] ?? 'null' ) );
 ok(
-	'MIT' === ( $c['licenses'][0]['license']['name'] ?? null ),
-	'reads its licence from its LICENSE file'
+	// A valid SPDX identifier belongs in license.id, not license.name.
+	'MIT' === ( $c['licenses'][0]['license']['id'] ?? null ),
+	'reads its licence from its LICENSE file and emits it as an SPDX id',
+	'got: ' . json_encode( $c['licenses'] ?? null )
 );
 
 heading( 'REGRESSION: a library is one component, not one per namespace' );
@@ -284,25 +292,47 @@ $dir = fixture(
 	array(
 		'my-plugin.php'       => plugin_header(),
 		'assets/app.js'       => "// my own source\nconsole.log('hi');\n",
-		'assets/app.min.js'   => "console.log('hi');\n",
+		'assets/app.min.js'   => minified_blob(),
 	)
 );
 $doc = scan( $dir );
 ok(
 	null === component( $doc, 'app.min.js' ),
-	'a minified file with a local source beside it is the author\'s own build'
+	'a bundle with a local source beside it is the author\'s own build'
 );
 
+heading( 'REGRESSION: a source in src/ still counts as a source' );
+// The old test was a same-directory sibling lookup, so the standard src/ to
+// dist/ layout and every Sass build were asserted to be third-party code.
+
 $dir = fixture(
-	'minified-orphan',
+	'minified-src-layout',
 	array(
-		'my-plugin.php'          => plugin_header(),
-		'assets/mystery.min.js'  => "!function(){var a=1}();\n",
+		'my-plugin.php'   => plugin_header(),
+		'src/widget.js'   => "// my own source\nexport const a = 1;\n",
+		'dist/widget.js'  => minified_blob(),
+		'src/theme.scss'  => "\$c: red;\n.a { color: \$c; }\n",
+		'dist/theme.css'  => minified_blob(),
 	)
 );
 $doc = scan( $dir );
-$c   = component( $doc, 'mystery.min.js' );
-ok( null !== $c, 'a minified file with no source and no banner is flagged' );
+ok( null === component( $doc, 'widget.js' ), 'a src/ to dist/ JS build is not third-party code' );
+ok( null === component( $doc, 'theme.css' ), 'a Sass build is not third-party code' );
+
+heading( 'REGRESSION: a bundle without .min. in the name is still a bundle' );
+// The flag keyed on the filename, so the default block build output
+// build/index.js, which inlines every dependency, was invisible.
+
+$dir = fixture(
+	'block-build',
+	array(
+		'my-plugin.php'    => plugin_header(),
+		'build/index.js'   => minified_blob(),
+	)
+);
+$doc = scan( $dir );
+$c   = component( $doc, 'index.js' );
+ok( null !== $c, 'a machine generated bundle is flagged even without .min. in its name' );
 ok(
 	'unidentified' === prop( $c, 'bodholdt:confidence' ),
 	'and it is flagged as unidentified rather than guessed at'
@@ -387,6 +417,203 @@ ok(
 	'got: ' . substr( $out, 0, 120 )
 );
 
+/* --- Fixes from the pre-publication review ---------------------------- */
+
+heading( 'REVIEW: a CDN mention does not become, or displace, a component' );
+
+$dir = fixture(
+	'cdn-does-not-displace',
+	array(
+		'my-plugin.php'                  => plugin_header(),
+		'assets/js/jquery-3.7.1.min.js'  => "/*! jQuery v3.7.1 | (c) OpenJS Foundation | jquery.org/license */\n"
+			. "// see also https://cdn.jsdelivr.net/npm/core-js-bundle@3.6.5/minified.js\n"
+			. minified_blob(),
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'jQuery' ), 'the real banner wins over a CDN mention lower down' );
+ok( null === component( $doc, 'core-js-bundle' ), 'the mentioned package is not fabricated as a component' );
+
+$dir = fixture(
+	'cdn-mention-only',
+	array(
+		'my-plugin.php'      => plugin_header(),
+		'assets/js/admin.js' => "// TODO: consider https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js\nfunction ready(){}\n",
+	)
+);
+$doc = scan( $dir );
+ok( count( $doc['components'] ) === 0, 'a CDN URL in a comment invents nothing' );
+ok( false !== strpos( scan_text( $dir ), 'sortablejs@1.15.0' ), 'but it is recorded as a note so the information is not lost' );
+
+heading( 'REVIEW: a version belonging to something else is not the package version' );
+
+$dir = fixture(
+	'schema-version',
+	array(
+		'my-plugin.php' => plugin_header(),
+		'vendor/acme/scheduler/composer.json'    => '{"name":"acme/scheduler"}',
+		'vendor/acme/scheduler/scheduler.php'    => "<?php\ndefine( 'ACME_STORE_SCHEMA_VERSION', '3' );\ndefine( 'ACME_SCHEDULER_VERSION', '3.8.2' );\n",
+	)
+);
+$doc = scan( $dir );
+ok( ( component( $doc, 'acme/scheduler' )['version'] ?? null ) === '3.8.2', 'a schema version is not mistaken for the package version' );
+ok(
+	'partial' === prop( component( $doc, 'acme/scheduler' ), 'bodholdt:confidence' ),
+	'and a version read out of source is PARTIAL, never IDENTIFIED'
+);
+
+$dir = fixture(
+	'conflicting-versions',
+	array(
+		'my-plugin.php'      => plugin_header(),
+		'tcpdf/LICENSE.txt'  => "The MIT License\n",
+		'tcpdf/barcodes.php' => "<?php\n/**\n * @package tcpdf\n * @version 1.0.015\n */\nclass Barcode {}\n",
+		'tcpdf/tcpdf.php'    => "<?php\n/**\n * @package tcpdf\n * @version 6.6.5\n */\nclass TCPDF {}\n",
+	)
+);
+$doc = scan( $dir );
+ok( null === ( component( $doc, 'tcpdf' )['version'] ?? null ), 'two candidate versions produce none rather than a guess' );
+ok( false !== strpos( scan_text( $dir ), 'more than one' ), 'and the conflict is reported' );
+
+heading( 'REVIEW: copied-in code is found without a manifest, and below the first level' );
+
+$dir = fixture(
+	'deep-unmanifested',
+	array(
+		'my-plugin.php'                  => "<?php\n/**\n * Plugin Name: My Plugin\n * Text Domain: my-plugin\n * Version: 1.0.0\n */\nnamespace MyPlugin;\n",
+		'includes/psr-log/Logger.php'    => "<?php\nnamespace Psr\\Log;\nclass Logger { const VERSION = '3.0.0'; }\n",
+		'includes/admin/settings.php'    => "<?php\nnamespace MyPlugin\\Admin;\nclass MyPluginSettings {}\n",
+		'includes/views/list-table.php'  => "<?php\n// a bare template, no declarations at all\n?>\n<div></div>\n",
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'psr-log' ), 'a library with no LICENSE and no manifest, two levels down, is found' );
+ok( null === component( $doc, 'admin' ), 'the author\'s own namespaced directory is not reported' );
+ok( null === component( $doc, 'views' ), 'a directory of bare templates is not reported as foreign' );
+
+heading( 'REVIEW: installed.json states which packages are dev-only' );
+
+$installed = json_encode(
+	array(
+		'packages'          => array(
+			array( 'name' => 'acme/runtime', 'version' => '1.0.0' ),
+			array( 'name' => 'acme/testkit', 'version' => '2.0.0' ),
+		),
+		'dev-package-names' => array( 'acme/testkit' ),
+	)
+);
+$dir = fixture(
+	'installed-dev-names',
+	array(
+		'my-plugin.php'                  => plugin_header(),
+		'vendor/composer/installed.json' => $installed,
+	)
+);
+$doc = scan( $dir );
+ok( 'shipped' === prop( component( $doc, 'acme/runtime' ), 'bodholdt:scope' ), 'a runtime package is shipped' );
+ok( 'dev-only' === prop( component( $doc, 'acme/testkit' ), 'bodholdt:scope' ), 'a package named in dev-package-names is not shipped product' );
+
+heading( 'REVIEW: installed.json does not blind the tool to the rest of the vendor tree' );
+
+$dir = fixture(
+	'installed-plus-stray',
+	array(
+		'my-plugin.php'                        => plugin_header(),
+		'vendor/composer/installed.json'       => json_encode( array( 'packages' => array( array( 'name' => 'acme/runtime', 'version' => '1.0.0' ) ) ) ),
+		'vendor/stray/oldlib/LICENSE'          => "The MIT License\n",
+		'vendor/stray/oldlib/OldLib.php'       => "<?php\nclass OldLib { const VERSION = '0.9.0'; }\n",
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'acme/runtime' ), 'the manifested package is reported' );
+ok( null !== component( $doc, 'oldlib' ), 'and a library the manifest does not mention is still found' );
+
+heading( 'REVIEW: LGPL and AGPL are not reported as GPL' );
+
+$dir = fixture(
+	'lgpl',
+	array(
+		'my-plugin.php'    => plugin_header(),
+		'acme/LICENSE'     => "GNU LESSER GENERAL PUBLIC LICENSE\nVersion 2.1, February 1999\n\nThis library is free software; you can redistribute it under the GNU Lesser General Public License.\n",
+		'acme/Acme.php'    => "<?php\nnamespace Acme;\nclass Acme { const VERSION = '1.0.0'; }\n",
+	)
+);
+$doc = scan( $dir );
+$lic = component( $doc, 'acme' )['licenses'][0]['license'] ?? array();
+$got = $lic['id'] ?? ( $lic['name'] ?? '' );
+ok( false !== strpos( (string) $got, 'LGPL' ), 'LGPL is not reported as GPL', 'got: ' . $got );
+
+heading( 'REVIEW: a prefixed vendor directory is recognised structurally' );
+
+$dir = fixture(
+	'strauss',
+	array(
+		'my-plugin.php'                              => plugin_header(),
+		'vendor-prefixed/acme/http/composer.json'    => '{"name":"acme/http","version":"1.2.3"}',
+		'vendor-prefixed/acme/http/Client.php'       => "<?php\nnamespace Prefixed\\Acme;\nclass Client {}\n",
+		'vendor-prefixed/beta/json/composer.json'    => '{"name":"beta/json","version":"4.5.6"}',
+		'vendor-prefixed/beta/json/Parser.php'       => "<?php\nnamespace Prefixed\\Beta;\nclass Parser {}\n",
+	)
+);
+$doc = scan( $dir );
+ok( null !== component( $doc, 'acme/http' ), 'a package in a non-standard vendor directory is found' );
+ok( null !== component( $doc, 'beta/json' ), 'and so is its neighbour' );
+
+heading( 'REVIEW: robustness' );
+
+$dir = fixture(
+	'npm-license-array',
+	array(
+		'my-plugin.php'      => plugin_header(),
+		'package-lock.json'  => json_encode(
+			array(
+				'lockfileVersion' => 3,
+				'packages'        => array(
+					''                        => array( 'name' => 'root' ),
+					'node_modules/acme-thing' => array( 'name' => 'acme-thing', 'version' => '1.0.0', 'license' => array( 'MIT', 'Apache-2.0' ) ),
+				),
+			)
+		),
+	)
+);
+$out = scan_text( $dir );
+ok( false === strpos( $out, 'Array to string' ), 'a non-string npm license does not raise a PHP warning' );
+$doc = scan( $dir );
+ok( is_array( $doc ) && isset( $doc['bomFormat'] ), 'and the CycloneDX output is still valid JSON' );
+
+$dir = fixture( 'scoped-purl', array(
+	'my-plugin.php'     => plugin_header(),
+	'package-lock.json' => json_encode( array(
+		'lockfileVersion' => 3,
+		'packages'        => array(
+			''                                => array( 'name' => 'root' ),
+			'node_modules/@scope/thing'       => array( 'name' => '@scope/thing', 'version' => '1.0.0' ),
+		),
+	) ),
+) );
+$doc = scan( $dir );
+ok(
+	'pkg:npm/%40scope/thing@1.0.0' === ( component( $doc, '@scope/thing' )['purl'] ?? null ),
+	'a scoped npm purl percent encodes its @',
+	'got: ' . ( component( $doc, '@scope/thing' )['purl'] ?? 'null' )
+);
+
+$dir = fixture( 'unreadable', array(
+	'my-plugin.php'         => plugin_header(),
+	'locked/secret.php'     => "<?php\nnamespace Foreign;\nclass Thing {}\n",
+) );
+@chmod( $dir . '/locked', 0000 );
+$out = scan_text( $dir );
+@chmod( $dir . '/locked', 0755 );
+ok( false === strpos( $out, 'Fatal error' ) && false === strpos( $out, 'Uncaught' ), 'an unreadable directory does not kill the run', 'got: ' . substr( $out, 0, 200 ) );
+
+$dir = fixture( 'no-version-field', array( 'my-plugin.php' => plugin_header() ) );
+$doc = scan( $dir );
+ok(
+	! array_key_exists( 'version', $doc['metadata']['component'] ) || null !== $doc['metadata']['component']['version'],
+	'no component carries a fabricated "unknown" version'
+);
+
 /* --- Document shape --------------------------------------------------- */
 
 heading( 'CycloneDX document' );
@@ -413,16 +640,44 @@ ok( null !== prop( $c, 'bodholdt:evidence' ), 'every component says how it was f
 
 heading( 'Diff' );
 
+function bom( array $components, string $product_version = '1.0.0' ): string {
+	return (string) json_encode(
+		array(
+			'bomFormat'   => 'CycloneDX',
+			'specVersion' => '1.6',
+			'metadata'    => array( 'component' => array( 'type' => 'application', 'name' => 'My Plugin', 'version' => $product_version ) ),
+			'components'  => $components,
+		)
+	);
+}
+
 $a = $GLOBALS['tmp'] . '/a.json';
 $b = $GLOBALS['tmp'] . '/b.json';
-file_put_contents( $a, json_encode( array( 'components' => array( array( 'name' => 'acme/http', 'version' => '1.0.0' ), array( 'name' => 'acme/gone', 'version' => '1.0.0' ) ) ) ) );
-file_put_contents( $b, json_encode( array( 'components' => array( array( 'name' => 'acme/http', 'version' => '2.0.0' ), array( 'name' => 'acme/new', 'version' => '1.0.0' ) ) ) ) );
+file_put_contents( $a, bom( array( array( 'name' => 'acme/http', 'version' => '1.0.0' ), array( 'name' => 'acme/gone', 'version' => '1.0.0' ) ) ) );
+file_put_contents( $b, bom( array( array( 'name' => 'acme/http', 'version' => '2.0.0' ), array( 'name' => 'acme/new', 'version' => '1.0.0' ) ) ) );
 
 $cmd  = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( TOOL ) . ' --diff ' . escapeshellarg( $a ) . ' ' . escapeshellarg( $b ) . ' 2>&1';
 $out  = (string) shell_exec( $cmd );
 ok( false !== strpos( $out, 'CHANGED  acme/http' ), 'diff reports a version change' );
 ok( false !== strpos( $out, 'ADDED    acme/new' ), 'diff reports an addition' );
 ok( false !== strpos( $out, 'REMOVED  acme/gone' ), 'diff reports a removal' );
+
+heading( 'REGRESSION: diff sees the product\'s own version, and rejects non-CycloneDX input' );
+// metadata.component holds the product, and Diff ignored metadata entirely,
+// so the headline use case (compare two releases) reported no changes when
+// the product version was the thing that moved.
+
+file_put_contents( $a, bom( array(), '1.4.0' ) );
+file_put_contents( $b, bom( array(), '1.5.0' ) );
+$cmd = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( TOOL ) . ' --diff ' . escapeshellarg( $a ) . ' ' . escapeshellarg( $b ) . ' 2>&1';
+$out = (string) shell_exec( $cmd );
+ok( false !== strpos( $out, '1.4.0 -> 1.5.0' ), 'a release to release diff reports the product version change', 'got: ' . trim( $out ) );
+
+$bad = $GLOBALS['tmp'] . '/not-a-bom.json';
+file_put_contents( $bad, '{"hello":"world"}' );
+$cmd = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( TOOL ) . ' --diff ' . escapeshellarg( $bad ) . ' ' . escapeshellarg( $b ) . ' 2>&1';
+$out = (string) shell_exec( $cmd );
+ok( false !== strpos( $out, 'Not a CycloneDX document' ), 'a JSON file that is not a bill of materials is rejected' );
 
 /* ------------------------------------------------------------------ done */
 

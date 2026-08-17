@@ -1,57 +1,65 @@
 # Known issues, from the pre-publication review
 
-**Date:** 2026-08-17  
-**Status:** BLOCKING. This tool is not fit to publish until the high severity items are resolved.
+**Review date:** 2026-08-17  
+**Last updated:** 2026-08-17, after the high severity round.
 
-A multi-agent adversarial review was run against 1.0.0 before making the repository public.
-Five independent lenses examined the tool, and every finding was then handed to a separate agent
-briefed to refute it, with instructions to reproduce rather than reason. **56 findings were raised,
-53 survived that refutation attempt, and 3 were refuted.**
+## Status
 
-Counts: **22 high, 26 medium, 5 low.**
-
-| Lens | Findings | of which high |
+| Severity | Count | Status |
 |---|---|---|
-| False positives | 13 | 5 |
-| False negatives | 10 | 6 |
-| Claims audit | 15 | 6 |
-| CycloneDX conformance | 8 | 2 |
-| Robustness | 7 | 3 |
+| High | 22 | **Fixed in 1.1.0.** Each has a regression test in `tests/run-tests.php`. |
+| Medium | 26 | Open. |
+| Low | 5 | Open. |
 
-## The verdict in one paragraph
+A multi-agent adversarial review was run against 1.0.0. Five independent lenses examined the tool,
+and every finding was handed to a separate agent briefed to refute it by reproducing it rather than
+reasoning about it. **56 findings were raised, 53 survived that refutation, 3 were refuted.**
 
-The tool's stated premise is that its value lies in finding copied-in code that no lockfile records.
-Two findings say that premise is not yet met: a directory only becomes a candidate if it carries a
-LICENSE file or a `composer.json` (#7, #42), and candidates are only ever looked for one level below
-the root (#6, #18). So the code the README calls "precisely the code nobody can account for" is
-frequently not reported at all, in any category, and the report reads as complete when it is not.
-Separately, the asset detector fabricates components: any file merely *mentioning* a CDN URL is
-asserted to BE that package, at the highest confidence, with a package URL emitted (#1, #17), and in
-the demonstrated case it also suppressed a genuinely shipped copy of jQuery. For a tool whose whole
-purpose is telling other people what is in their code, confident fabrication is the worst available
-failure, and it is worse than the misses.
+## What the high severity round changed
 
-**These are defects in the detector design, not in its tuning.** Silence and fabrication are the two
-things this tool most needed to avoid, and it currently does both.
+The two defects that made the tool unfit to publish were both about asserting more than the evidence
+supported, in opposite directions.
 
-## What this review got right, and what it cost
+**It fabricated components.** Any file merely mentioning a package's CDN URL was reported as being
+that package, at the highest confidence, with a package URL emitted. In the reproduced case it also
+suppressed a genuinely shipped jQuery in the same file. The CDN match is now anchored to the actual
+rewrite header inside the leading comment, the preserved-banner branch is tested first so a real
+banner cannot be displaced, and a CDN URL anywhere else becomes a note rather than a component.
 
-The review was worth running. It found, with reproductions and controls, defects that would have
-been found instead by the first plugin author who tried the tool, at the cost of the credibility
-the tool exists to build. Two findings in particular were caught only because an agent built a
-control case rather than reading the code: the jQuery suppression (#1) and the wrong-version
-attribution (#2).
+**It could not find what it existed to find.** A directory only became a candidate if it kept a
+LICENSE file or a composer.json, and only one level below the root. Both gates are gone. Candidates
+are now sought to a bounded depth, a manifest raises confidence rather than granting entry, and
+foreignness needs positive evidence: a directory that declares names unrelated to the product. A
+directory that declares nothing at all, such as a folder of templates, is not foreign, and reading
+that silence as foreignness was what reported `admin/` and `assets/` as dependencies.
+
+Three further corrections came out of testing the fixes against the real plugins rather than against
+fixtures:
+
+- Tokenisation did not split CamelCase, so a class called `BodholdtGDrive_Licensing_Client` produced
+  the token `bodholdtgdrive`, which did not match the product's own `bodholdt`, and the author's own
+  file read as third party.
+- A pass-through directory was reported instead of the library inside it, so `inc/deep/nested-lib`
+  was named `deep`.
+- Reading `installed.json` without its `dev-package-names` list asserted 26 dev-only packages as
+  shipped product in one real plugin. Believing the manifest's own statement corrected it.
+
+**Version inference is now tiered and refuses to guess.** A `const VERSION` beats a `define()`, which
+beats an `@version` docblock, and a docblock is only trusted in a file that looks like the library's
+entry point. Constants naming a schema, a database revision or a platform requirement are rejected.
+When two candidates conflict, none is recorded and the conflict is reported. A version read out of
+source is always PARTIAL and its evidence string says "unverified", because a good guess filed under
+"name and version both known" tells the reader they can answer a question they cannot.
 
 ---
 
 
 
-## High
+## High. Fixed in 1.1.0.
 
 ### 1. A CDN URL mentioned anywhere in a JS/CSS file is asserted as that file's identity, at the highest confidence level
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:652 (Scanner::identify_asset, jsDelivr branch)`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:652 (Scanner::identify_asset, jsDelivr branch)`
 
 The jsDelivr regex is unanchored and runs against the first 4096 bytes of every .js/.css file, so any file that merely *mentions* a CDN URL is reported as being that package, with confidence IDENTIFIED and a purl — fabricating components that are not in the product at all.
 
@@ -61,8 +69,7 @@ The jsDelivr regex is unanchored and runs against the first 4096 bytes of every 
 
 ### 2. Vendored libraries below the first directory level are never scanned, producing a clean bill of health for a plugin full of copied-in code
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:422 (Scanner::library_candidates)`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:422 (Scanner::library_candidates)`
 
 library_candidates() enumerates only `glob($this->root.'/*', GLOB_ONLYDIR)` plus composer-named vendor dirs, so anything one level further down — `includes/<lib>/`, `lib/<lib>/`, `inc/<lib>/`, the most common WordPress vendoring layouts — is never a candidate and is never reported in any category.
 
@@ -72,8 +79,7 @@ library_candidates() enumerates only `glob($this->root.'/*', GLOB_ONLYDIR)` plus
 
 ### 3. A vendor/composer/installed.json blinds the tool to every other library in that vendor tree
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:285 (Scanner::detect_composer marks the whole vendor dir claimed) plus the Pass B guard at line 399`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:285 (Scanner::detect_composer marks the whole vendor dir claimed) plus the Pass B guard at line 399`
 
 detect_composer() pushes the entire `$vendor_dir` onto `$this->claimed` for every package it reads, and it runs before detect_vendored_php(). composer_style_vendor_dirs() then filters claimed paths out, and Pass B additionally skips any vendor dir that has `composer/installed.json`. Net effect: a library hand-copied into an existing `vendor/` is invisible — the single most likely place for unrecorded code to hide.
 
@@ -83,8 +89,7 @@ detect_composer() pushes the entire `$vendor_dir` onto `$this->claimed` for ever
 
 ### 4. installed.json's own dev-package-names list is discarded; 24 dev-only packages are asserted to be shipped product components
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:283 (Scanner::detect_composer, scope assignment from installed.json)`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:283 (Scanner::detect_composer, scope assignment from installed.json)`
 
 When reading `vendor/composer/installed.json` the tool ignores the file's `dev` flag and `dev-package-names` array — the authoritative record of which installed packages are dev-only — and instead assigns SHIPPED to everything except a hard-coded 13-name DEV_TOOLING list. The README says the code path from installed.json is 'a better answer than the lockfile'; it is in fact the only path where dev separation is thrown away.
 
@@ -94,8 +99,7 @@ When reading `vendor/composer/installed.json` the tool ignores the file's `dev` 
 
 ### 5. The author's own minified build output is asserted to be unattributable third-party code with 'no local source'
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:683 (Scanner::identify_asset, minified branch)`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:683 (Scanner::identify_asset, minified branch)`
 
 The 'has a local source' test is a same-directory, same-stem, same-extension sibling lookup (`is_file($m[1].'.'.$m[2])`). Sources kept in a `src/` subdirectory or written in Sass/Less fail it, so the tool prints 'Third party code is present here and this tool could not attribute it' and the evidence string 'minified asset with no banner and no local source' about files the author wrote. Separately, 'minified' is decided purely by the `.min.` filename, never by content.
 
@@ -105,8 +109,7 @@ The 'has a local source' test is a same-directory, same-stem, same-extension sib
 
 ### 6. Version inference reports unrelated *_VERSION constants and per-file @version docblocks as the library's version
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:514 (Scanner::find_version_constant)`
+**FIXED** · **Lens:** claims · **Location:** `bodholdt-sbom.php:514 (Scanner::find_version_constant)`
 
 The three patterns match `define('<anything>VERSION', ...)` (case-insensitively, so minimum-platform constants match) and any `@version` docblock tag, in whichever file is reached first. The shallow-file pass is plain `glob()` order with no name scoring — the stem-matching sort is applied only inside lib/src/includes/source — so an `autoload.php`/`bootstrap.php` is read before the file actually named after the library. The wrong number is then printed as fact with the evidence 'version read from <file>'. For CRA reporting a wrong version is worse than no version.
 
@@ -116,8 +119,7 @@ The three patterns match `define('<anything>VERSION', ...)` (case-insensitively,
 
 ### 7. Non-string npm `license` field emits a PHP warning onto stdout, producing a file that is not JSON at all
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:356 (Scanner::detect_npm, lockfileVersion 2/3 branch) — `$c->licenses = isset( $pkg['license'] ) ? array( (string) $pkg['license'] ) : array();``
+**FIXED** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:356 (Scanner::detect_npm, lockfileVersion 2/3 branch) — `$c->licenses = isset( $pkg['license'] ) ? array( (string) $pkg['license'] ) : array();``
 
 `(string)` is applied to a `license` value that npm legitimately writes as an array, which raises a PHP `Array to string conversion` warning; PHP CLI writes that warning to stdout, so it lands ahead of the JSON document, and the recorded licence becomes the literal string "Array".
 
@@ -134,8 +136,7 @@ Python `json.load` fails with `Expecting value: line 2 column 1`. With `--output
 
 ### 8. json_encode failure is unchecked: a non-UTF-8 byte anywhere produces a 1-byte file, "Written to", and exit 0
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:848 (CycloneDX::render) — `return json_encode( $bom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) . "\n";``
+**FIXED** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:848 (CycloneDX::render) — `return json_encode( $bom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) . "\n";``
 
 `json_encode` returns `false` on malformed UTF-8; `false . "\n"` is the string "\n", so the tool silently emits an empty document, reports success on stderr, and exits 0. A build that runs this as its SBOM step believes it produced an SBOM.
 
@@ -145,8 +146,7 @@ Python `json.load` fails with `Expecting value: line 2 column 1`. With `--output
 
 ### 9. library_candidates() never descends below one level, so the dominant WP vendoring location (includes/, inc/, src/) is invisible
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:415-434 (library_candidates), line 420: glob( $base . '/*', GLOB_ONLYDIR )`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:415-434 (library_candidates), line 420: glob( $base . '/*', GLOB_ONLYDIR )`
 
 Pass A only globs one level below the root and below composer-style vendor dirs, so a wholesale-copied library sitting at includes/<lib>/ or includes/lib/<lib>/ is never even considered as a candidate, and stays silent rather than being reported as unidentified.
 
@@ -156,8 +156,7 @@ Pass A only globs one level below the root and below composer-style vendor dirs,
 
 ### 10. The LICENSE-or-composer.json gate makes the tool blind to precisely the undocumented vendoring it exists to find
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:428 — ( $this->has_license_file( $dir ) || is_file( $dir . '/composer.json' ) ) && $this->contains_php( $dir )`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:428 — ( $this->has_license_file( $dir ) || is_file( $dir . '/composer.json' ) ) && $this->contains_php( $dir )`
 
 A library copied in with its LICENSE and composer.json stripped — the single most common way third-party PHP arrives in a WordPress plugin, and the case the file header calls 'precisely the code nobody can account for' — is silently dropped, not reported as unidentified.
 
@@ -167,8 +166,7 @@ A library copied in with its LICENSE and composer.json stripped — the single m
 
 ### 11. Strauss/Mozart prefixed vendor trees produce zero components even though every package retains its composer.json and LICENSE
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:85 (VENDOR_DIRS) interacting with 415-434 (library_candidates) and 713-726 (composer_style_vendor_dirs)`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:85 (VENDOR_DIRS) interacting with 415-434 (library_candidates) and 713-726 (composer_style_vendor_dirs)`
 
 VENDOR_DIRS is a closed six-entry list (vendor, vendors, third-party, thirdparty, 3rdparty, external). Strauss's default output directory vendor-prefixed/ (and Mozart-style dependencies/, or any custom name) is not in it, so pass B never treats it as a multi-package container; and because its packages sit at depth 2 (vendor-prefixed/<publisher>/<package>) pass A cannot reach them either. Everything vanishes.
 
@@ -178,8 +176,7 @@ VENDOR_DIRS is a closed six-entry list (vendor, vendors, third-party, thirdparty
 
 ### 12. Single-file vendored libraries are structurally excluded by GLOB_ONLYDIR, including files the tool already opens
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:420 — glob( $base . '/*', GLOB_ONLYDIR ) — candidates must be directories`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:420 — glob( $base . '/*', GLOB_ONLYDIR ) — candidates must be directories`
 
 Every detector for copied-in PHP requires a directory, so the entire class of one-file drop-in libraries is silently missed, even when the file carries an explicit version the tool's own find_version_constant() patterns would have matched.
 
@@ -189,8 +186,7 @@ Every detector for copied-in PHP requires a directory, so the entire class of on
 
 ### 13. The claimed-subtree rule swallows nested vendor trees, so adding a LICENSE file removes real components from the SBOM
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:381-405 (detect_vendored_php pass A claims the whole subtree) interacting with 720 (composer_style_vendor_dirs filters out claimed paths)`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:381-405 (detect_vendored_php pass A claims the whole subtree) interacting with 720 (composer_style_vendor_dirs filters out claimed paths)`
 
 Pass A claims a library's entire subtree on the rationale that its subdirectories are namespaces. But a nested vendor/ directory inside that library holds genuinely separate third-party packages, and because pass B re-derives composer_style_vendor_dirs() after the claim it is filtered out — so those packages disappear. Detection gets strictly worse as the vendored tree gets better documented.
 
@@ -200,8 +196,7 @@ Pass A claims a library's entire subtree on the rationale that its subdirectorie
 
 ### 14. The minified-asset flag keys on the .min. filename rather than on content, so the default wp-scripts block build is invisible
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:676 — preg_match( '/^(.*)\.min\.(js|css)$/i', $file, $m )`
+**FIXED** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:676 — preg_match( '/^(.*)\.min\.(js|css)$/i', $file, $m )`
 
 The only net for un-bannered bundled JS requires the filename to contain '.min.'. @wordpress/scripts — the officially recommended build tool for every block plugin — emits build/index.js: minified, no banner, no '.min.' in the name, and containing every inlined runtime npm dependency. It is passed over in silence.
 
@@ -211,8 +206,7 @@ The only net for un-bannered bundled JS requires the filename to contain '.min.'
 
 ### 15. CDN pattern matches any /npm/<pkg>@<ver> substring anywhere in the first 4 KB, and it runs before the banner check
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:652 (Scanner::identify_asset)`
+**FIXED** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:652 (Scanner::identify_asset)`
 
 The jsDelivr regex is unanchored and is not tied to the jsDelivr rewrite header, so any .js/.css file whose first 4096 bytes merely mention a CDN URL is reported as being that package, with confidence IDENTIFIED and a purl. Because the CDN branch is tested first, it also overrides a correct preserved banner sitting in position one.
 
@@ -222,8 +216,7 @@ The jsDelivr regex is unanchored and is not tied to the jsDelivr rewrite header,
 
 ### 16. Version patterns pick up a version belonging to something other than the library, and attach it to a real package name
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:519 and :521 (Scanner::find_version_constant), :565 (version_search_order)`
+**FIXED** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:519 and :521 (Scanner::find_version_constant), :565 (version_search_order)`
 
 The define() pattern matches any constant whose name merely ends in VERSION (schema versions, DB versions, minimum-requirement versions), and the @version pattern matches any docblock tag in any file. The shallow scan at line 565 emits `glob($dir.'/*.php')` in raw alphabetical order with none of the name-affinity sorting that is applied to lib/src/includes, so the first file alphabetically wins even when the correct version is in a sibling file.
 
@@ -233,8 +226,7 @@ The define() pattern matches any constant whose name merely ends in VERSION (sch
 
 ### 17. An inferred version is promoted to IDENTIFIED whenever composer.json supplies a name
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:486-489 (Scanner::identify_vendored_library)`
+**FIXED** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:486-489 (Scanner::identify_vendored_library)`
 
 Line 487 correctly sets PARTIAL with the comment "version by inference", then lines 488-489 overwrite it with IDENTIFIED merely because the name was confirmed. The version is still a guess, but the report files it under "Name and version both known. These are the ones you can answer questions about", removing the only signal that would tell the author to check it.
 
@@ -244,8 +236,7 @@ Line 487 correctly sets PARTIAL with the comment "version by inference", then li
 
 ### 18. Licence sniffer reports LGPL as GPL and AGPL as GPL, and picks the wrong licence from a multi-licence file
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:592-626 (Scanner::sniff_license_file), map at :599-608`
+**FIXED** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:592-626 (Scanner::sniff_license_file), map at :599-608`
 
 The map is substring matching over the first 4096 bytes with no negative lookaround, so any text containing the phrase "GNU General Public License" is called GPL, and the first map entry to match wins regardless of which licence actually governs. LGPL and AGPL texts both quote the GPL by name in their opening sections, and a COPYING file that lists two licences is resolved by map order rather than by which licence covers the code.
 
@@ -255,8 +246,7 @@ The map is substring matching over the first 4096 bytes with no negative lookaro
 
 ### 19. vendor/composer/installed.json dev metadata is ignored, so dev-only packages are asserted to be part of the shipped product
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:269-287 (Scanner::detect_composer), scope set at :283`
+**FIXED** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:269-287 (Scanner::detect_composer), scope set at :283`
 
 installed.json carries `dev: true` and a `dev-package-names` array. The tool reads only the `packages` list and hard-assigns SHIPPED to every entry except the fourteen names hardcoded in DEV_TOOLING, so a vendor tree that is entirely dev dependencies is reported as the product's shipped bill of materials.
 
@@ -266,8 +256,7 @@ installed.json carries `dev: true` and a `dev-package-names` array. The tool rea
 
 ### 20. Any unreadable directory in the tree kills the whole run with an uncaught UnexpectedValueException
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:777 (Scanner::walk), reached from detect_bundled_assets():633`
+**FIXED** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:777 (Scanner::walk), reached from detect_bundled_assets():633`
 
 walk() constructs a RecursiveDirectoryIterator with no CATCH_GET_CHILD flag and no try/catch, so the first directory the process cannot open throws an uncaught UnexpectedValueException that aborts the entire scan.
 
@@ -277,8 +266,7 @@ walk() constructs a RecursiveDirectoryIterator with no CATCH_GET_CHILD flag and 
 
 ### 21. json_encode() failure is unchecked: one non-UTF-8 byte produces an empty CycloneDX document and exit 0
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:848 (CycloneDX::render), consumed by emit():1175`
+**FIXED** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:848 (CycloneDX::render), consumed by emit():1175`
 
 render() returns json_encode(...) . "\n" without testing for false, so when any component name, path or evidence string contains a byte that is not valid UTF-8 the function returns the single character "\n", which emit() happily writes to the output file and reports as success.
 
@@ -288,8 +276,7 @@ render() returns json_encode(...) . "\n" without testing for false, so when any 
 
 ### 22. contains_php() reports 'no PHP here' after 200 files, silently deleting whole vendored packages from the SBOM
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:735-746 (Scanner::contains_php), gating library_candidates():435 and detect_vendored_php():405`
+**FIXED** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:735-746 (Scanner::contains_php), gating library_candidates():435 and detect_vendored_php():405`
 
 contains_php() returns false when its 200-file budget runs out, so 'I gave up looking' is indistinguishable from 'there is no PHP in this directory'; the caller then drops the package entirely, with no note, and the summary still claims zero gaps.
 
@@ -298,12 +285,11 @@ contains_php() returns false when its 200-file budget runs out, so 'I gave up lo
 **Fix.** Distinguish 'budget exhausted' from 'nothing found'. Return a tri-state (or a bool plus an $exhausted flag) and, when the budget ran out, treat the directory as a candidate anyway and attach a note saying the check was truncated. A component the tool declined to examine must never be reported as '0 with gaps'.
 
 
-## Medium
+## Medium. Open.
 
 ### 23. Code copied in with no LICENSE and no manifest — the case the README says the tool exists for — is invisible
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:435 (Scanner::library_candidates gate: has_license_file || composer.json)`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:435 (Scanner::library_candidates gate: has_license_file || composer.json)`
 
 A directory only becomes a candidate if it carries a LICENSE file or a composer.json. So the tool can only find copied-in code that the copier was careful enough to keep an attribution artifact for. The README's premise is the opposite: 'a great deal of third party code arrives in a plugin by being copied in, with no manifest, no version file, and nothing for a lockfile-based tool to read... the useful output is the list of things it found and could not identify.'
 
@@ -313,8 +299,7 @@ A directory only becomes a candidate if it carries a LICENSE file or a composer.
 
 ### 24. The report tells the user to run --all, which the CLI rejects with exit 2
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:946 (TextReport::render) vs main() unknown-option branch at line 1126`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:946 (TextReport::render) vs main() unknown-option branch at line 1126`
 
 The BUILD TIME ONLY block prints 'Not part of the shipped product, listed for completeness. Use --all to expand.' No --all option exists; it is not in usage() and not in the README, and main() rejects any unrecognised `--` argument.
 
@@ -324,8 +309,7 @@ The BUILD TIME ONLY block prints 'Not part of the shipped product, listed for co
 
 ### 25. Components sharing a directory basename with no version collapse into one, silently shortening 'the list that matters'
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:71 (Component::key) used by Scanner::add at line 136`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:71 (Component::key) used by Scanner::add at line 136`
 
 The dedupe key is `strtolower(name).'@'.(version ?? '?')`. Unidentified components are named from a directory basename or a file basename and by definition have no version, so every unidentified component whose basename collides with another is dropped, and the printed count is short by the number dropped. The commented rationale ('Two detectors finding the same name and version have found one component') does not hold when the name is a filesystem basename and the version is literally unknown.
 
@@ -335,8 +319,7 @@ The dedupe key is `strtolower(name).'@'.(version ?? '?')`. Unidentified componen
 
 ### 26. The IDENTIFIED / PARTIAL buckets do not match their own printed definitions, and the README's sample output shows a section the tool never produces
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:926 and 932 (TextReport section blurbs); confidence is set from version alone at lines 211, 279, 310, 479-490; README.md:33-34 and 86-96`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:926 and 932 (TextReport section blurbs); confidence is set from version alone at lines 211, 279, 310, 479-490; README.md:33-34 and 86-96`
 
 Confidence is computed as `$c->version ? IDENTIFIED : PARTIAL` everywhere — licence is never considered. So (a) a component with a version but no licence lands under 'IDENTIFIED — Name and version both known. These are the ones you can answer questions about', contradicting the README's 'Partially identified. Found and named, but the version **or the licence** is missing'; and (b) vendored libraries with both a version and a licence land under PARTIAL, printed beneath a blurb stating that one of the two is missing. The README's 'What the output looks like' block compounds this by showing stripe-php under `NOT IDENTIFIED (1)`, a section the tool never puts it in.
 
@@ -346,8 +329,7 @@ Confidence is computed as `$c->version ? IDENTIFIED : PARTIAL` everywhere — li
 
 ### 27. npm build-time/shipped separation is discarded exactly when the tool is used as instructed
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:338 (Scanner::detect_npm, $ships) and 358/369 (scope assignment)`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:338 (Scanner::detect_npm, $ships) and 358/369 (scope assignment)`
 
 README: 'package-lock.json, with build time dependencies separated from shipped ones.' The lockfile records that separation itself in each entry's `dev` flag, but the code overrides it with `$ships = is_dir(.../node_modules)`: if node_modules is absent, every entry — including declared runtime dependencies — becomes DEV_ONLY. The README also tells the user to run the tool on staged build output just before zipping, which never contains node_modules. So under the recommended usage the advertised separation never actually happens.
 
@@ -357,8 +339,7 @@ README: 'package-lock.json, with build time dependencies separated from shipped 
 
 ### 28. The CycloneDX document omits every note the tool raised, including its own coverage caveats
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:812 (CycloneDX::render — $result['notes'] is never read)`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:812 (CycloneDX::render — $result['notes'] is never read)`
 
 README: 'If you pass this document to somebody else, they can see how each line was arrived at.' The per-component evidence properties are emitted, but the scanner's notes — 'node_modules is not present, so they are treated as build time only... this tool cannot see that', 'A .git directory is present', 'Could not parse <file>: <json error>' — are dropped. The machine-readable artifact is strictly less honest than the text report, and it is the artifact that gets handed on.
 
@@ -368,8 +349,7 @@ README: 'If you pass this document to somebody else, they can see how each line 
 
 ### 29. The node_modules hygiene note only fires at the top level, so 'it will say so' is untrue for the common layouts
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:701-706 (Scanner::detect_shipping_hygiene)`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:701-706 (Scanner::detect_shipping_hygiene)`
 
 README: 'If it sees a .git directory or a node_modules directory it will say so.' Both checks are `is_dir($this->root.'/<name>')` — root only. A node_modules under a build subdirectory (or a .git in a nested package) produces no note, while find_files() and detect_bundled_assets() both deliberately skip node_modules, so nothing else surfaces it either.
 
@@ -379,8 +359,7 @@ README: 'If it sees a .git directory or a node_modules directory it will say so.
 
 ### 30. `licenses` is serialised as a JSON object instead of an array — a hard CycloneDX 1.6 schema violation
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:864 (CycloneDX::component) fed by :278, :309 and :477 — `array_map( 'strval', (array) ( $composer['license'] ?? array() ) )``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:864 (CycloneDX::component) fed by :278, :309 and :477 — `array_map( 'strval', (array) ( $composer['license'] ?? array() ) )``
 
 When a `license` value decodes to a string-keyed array, the `(array)` cast and both `array_map` calls preserve those keys, so `json_encode` emits `licenses` as an object. CycloneDX 1.6 defines `component.licenses` as `licenseChoice`, `"type": "array"`. The same code also promotes the URL half of the value into a fabricated licence name.
 
@@ -394,8 +373,7 @@ Validated against the official bom-1.6.schema.json (Draft-7, spdx/jsf subschemas
 
 ### 31. npm workspace lockfile paths are turned into purls for npm packages that do not exist
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:353-360 (Scanner::detect_npm) — `$name = $pkg['name'] ?? preg_replace( '#^.*node_modules/#', '', (string) $rel_path ); ... $c->purl = 'pkg:npm/' . $name . '@' . $c->version;``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:353-360 (Scanner::detect_npm) — `$name = $pkg['name'] ?? preg_replace( '#^.*node_modules/#', '', (string) $rel_path ); ... $c->purl = 'pkg:npm/' . $name . '@' . $c->version;``
 
 For lockfileVersion 2/3 the `packages` map is keyed by workspace-relative path, not only by `node_modules/...`. When the key has no `node_modules/` prefix the regex leaves the path intact and it is pasted straight into a purl, so a directory path becomes a scoped-package identity assertion. Local workspace packages — the author's own code — are also reported as shipped third-party libraries pointing at the public registry.
 
@@ -412,8 +390,7 @@ For lockfileVersion 2/3 the `packages` map is keyed by workspace-relative path, 
 
 ### 32. Scoped npm purls are not percent-encoded, so they are not canonical package-urls
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:360, :371 and :656 — `'pkg:npm/' . $name . '@' . $c->version``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:360, :371 and :656 — `'pkg:npm/' . $name . '@' . $c->version``
 
 The npm purl type definition states the scope's `@` prefix "is always percent encoded" (canonical example `pkg:npm/%40angular/animation@12.3.1`), and CycloneDX 1.6 says of `purl`: "The purl, if specified, must be valid and conform to the specification". The tool emits the raw `@`, so every scoped package carries a non-canonical identity.
 
@@ -423,8 +400,7 @@ The npm purl type definition states the scope's `@` prefix "is always percent en
 
 ### 33. `"version": "unknown"` fabricates a version in a field CycloneDX 1.6 makes optional
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:855 (CycloneDX::component) — `'version' => $c->version ?? 'unknown',``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:855 (CycloneDX::component) — `'version' => $c->version ?? 'unknown',``
 
 CycloneDX 1.6 requires only `type` and `name` on a component (`definitions.component.required == ["type","name"]`), and defines `version` as "A single disjunctive version identifier". Writing the literal string "unknown" asserts a version that does not exist, instead of omitting the field. The tool's central signal — that it could not identify this thing — survives only in the non-standard `bodholdt:confidence` property, which most consumers discard, while the standard field makes a positive claim.
 
@@ -434,8 +410,7 @@ CycloneDX 1.6 requires only `type` and `name` on a component (`definitions.compo
 
 ### 34. `--diff` keys CycloneDX documents on bare `name`, ignores nested components, and ignores metadata.component
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:1047-1059 (Diff::load) — `foreach ( (array) ( $data['components'] ?? array() ) as $c ) { $out[ (string) $c['name'] ] = ... }``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:1047-1059 (Diff::load) — `foreach ( (array) ( $data['components'] ?? array() ) as $c ) { $out[ (string) $c['name'] ] = ... }``
 
 CycloneDX identity is `purl`/`bom-ref`, or at minimum `group` + `name` + `version`; `name` alone is not unique, `components` may nest (`component.components`), and the subject of the BOM lives in `metadata.component`, not in `components`. Diff::load reads none of that, so a real dependency upgrade is reported as no change at all.
 
@@ -448,8 +423,7 @@ CycloneDX identity is `purl`/`bom-ref`, or at minimum `group` + `name` + `versio
 
 ### 35. The preserved-banner regex misses the multi-line and three-word banner shapes that most real dist files actually use
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:661 — '#^\s*/\*!\s*([A-Za-z][A-Za-z0-9._\-]{1,30}(?:[ ][A-Za-z0-9._\-]{1,20})?)[\s,|]+v?([0-9]+\.[0-9]+...#'`
+**OPEN** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:661 — '#^\s*/\*!\s*([A-Za-z][A-Za-z0-9._\-]{1,30}(?:[ ][A-Za-z0-9._\-]{1,20})?)[\s,|]+v?([0-9]+\.[0-9]+...#'`
 
 Two independent limits in one pattern: the name may be at most two space-separated words, and the name must follow /*! with only whitespace between — a leading ' * ' on the next line breaks it. That excludes the standard multi-line JSDoc-style banner and any three-word product name, which together cover most real vendored dist headers. README explicitly claims banner detection.
 
@@ -459,8 +433,7 @@ Two independent limits in one pattern: the name may be at most two space-separat
 
 ### 36. The unminified-sibling rule suppresses detection for exactly the vendored dist folder it is meant to distinguish from
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:676-679 — if ( is_file( $m[1] . '.' . $m[2] ) ) return null; // Built from a local source`
+**OPEN** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:676-679 — if ( is_file( $m[1] . '.' . $m[2] ) ) return null; // Built from a local source`
 
 'An unminified source of the same name sits beside it' is treated as proof the file is the author's own build output. Every third-party dist folder downloaded from a release page or a CDN ships both foo.js and foo.min.js side by side, so the heuristic fires hardest on genuinely third-party code and the pair becomes doubly invisible: the .min file is suppressed, and the unminified file is only ever checked for a banner.
 
@@ -470,8 +443,7 @@ Two independent limits in one pattern: the name may be at most two space-separat
 
 ### 37. contains_php()'s 200-file budget returns false on exhaustion, so large asset-heavy libraries are dropped and results depend on filesystem order
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:728-739 — $budget = 200; ... if ( $budget-- <= 0 ) { return false; }`
+**OPEN** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:728-739 — $budget = 200; ... if ( $budget-- <= 0 ) { return false; }`
 
 Running out of budget is reported as 'contains no PHP' rather than 'unknown', so a fully manifested library whose PHP files happen to be iterated after 200 non-PHP files is silently excluded from both pass A and pass B. The failure mode scales the wrong way: the bigger the vendored library, the more likely it disappears. It is also walk-order dependent, so the same tree can produce different SBOMs on different filesystems.
 
@@ -481,8 +453,7 @@ Running out of budget is reported as 'contains no PHP' rather than 'unknown', so
 
 ### 38. A node_modules tree that actually ships yields no components and no note unless it sits exactly at the root, and no shipped artifact outside .js/.css is ever considered
 
-**Lens:** false-negatives  
-**Location:** `bodholdt-sbom.php:695 (root-only is_dir check), 630 (asset walk skips /node_modules/), 627 (only .js and .css), 422 and 757 (node_modules excluded from candidates and from find_files)`
+**OPEN** · **Lens:** false-negatives · **Location:** `bodholdt-sbom.php:695 (root-only is_dir check), 630 (asset walk skips /node_modules/), 627 (only .js and .css), 422 and 757 (node_modules excluded from candidates and from find_files)`
 
 node_modules is excluded from every detector by name, and the compensating hygiene note only fires for a root-level node_modules. A node_modules one level down that genuinely ships produces neither components nor a note, even though each package's own package.json on disk carries name, version and licence. Separately, detect_bundled_assets() filters to .js|.css only, so shipped webfonts, .wasm modules and platform binaries are not components and draw no note either.
 
@@ -492,8 +463,7 @@ node_modules is excluded from every detector by name, and the compensating hygie
 
 ### 39. Banner stopword list is bypassed by the optional second word, fabricating components from ordinary comments
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:668-678 (banner branch), stopword list at :106-109`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:668-678 (banner branch), stopword list at :106-109`
 
 The stopword test at line 670 is applied to the whole captured string, but the capture may be two words. 'fixed' and 'updated' are stopwords; 'Fixed in' and 'Updated for' are not. The second word also happily captures a bare hyphen, mangling real library names. And a build tool's own banner on the author's own asset is reported as a separate third-party component.
 
@@ -503,8 +473,7 @@ The stopword test at line 670 is applied to the whole captured string, but the c
 
 ### 40. The subject of the whole SBOM is taken from whichever root .php file glob returns first, with no warning when several carry a plugin header
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:218-236 (Scanner::read_plugin_header)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:218-236 (Scanner::read_plugin_header)`
 
 read_plugin_header returns on the first match and never checks whether another root file also declares a Plugin Name. glob() is alphabetical, and '-' (0x2D) sorts before '.' (0x2E), so any `<slug>-legacy.php`, `<slug>-loader.php`, `<slug>-deprecated.php` beats `<slug>.php`. The result becomes CycloneDX metadata.component, the identity the entire document is about.
 
@@ -514,8 +483,7 @@ read_plugin_header returns on the first match and never checks whether another r
 
 ### 41. should-not-ship flag fires on general-purpose libraries declared as production dependencies
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:283 and :316, list at :97-103 (DEV_TOOLING)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:283 and :316, list at :97-103 (DEV_TOOLING)`
 
 DEV_TOOLING is matched by exact package name with no regard for how the package was required. sebastian/diff is a standalone BSD-3 diff library with legitimate runtime uses (and squizlabs/php_codesniffer is legitimately shipped by code-quality plugins). When such a package appears in composer.lock's production `packages` section, the tool still asserts it should not ship and instructs the author to remove it.
 
@@ -525,8 +493,7 @@ DEV_TOOLING is matched by exact package name with no regard for how the package 
 
 ### 42. CDN version capture swallows trailing punctuation, emitting a malformed version and an invalid purl
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:652-658`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:652-658`
 
 The version group is `([0-9][^/\s]*)`, which excludes only slash and whitespace, so quotes, semicolons, parentheses and backticks are captured as part of the version whenever the URL is not followed by a path segment. The corrupted string is written straight into both the version field and the purl.
 
@@ -536,8 +503,7 @@ The version group is `([0-9][^/\s]*)`, which excludes only slash and whitespace,
 
 ### 43. Components are keyed by name@version, so two distinct unidentifiable artifacts collapse into one entry with one path
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:71-73 (Component::key) and :136-156 (Scanner::add)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:71-73 (Component::key) and :136-156 (Scanner::add)`
 
 Unidentified components are named by basename and have no version, so their key is `<basename>@?`. Two genuinely different files or directories that share a basename produce the same key and the second is discarded. The surviving record asserts a single path, which is a wrong statement about where that code lives, and the discarded one vanishes from the section the README calls the valuable output.
 
@@ -547,8 +513,7 @@ Unidentified components are named by basename and have no version, so their key 
 
 ### 44. npm workspace link entries are reported as a second, versionless copy of a package that is already fully identified
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:347-362 (Scanner::detect_npm)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:347-362 (Scanner::detect_npm)`
 
 lockfileVersion 2/3 `packages` entries include `"link": true` aliases that point at a workspace directory. They carry no name and no version, so the tool derives a name from the path and files them as PARTIAL, fabricating a gap for a package it has already identified from the workspace entry.
 
@@ -558,8 +523,7 @@ lockfileVersion 2/3 `packages` entries include `"link": true` aliases that point
 
 ### 45. The author's own subdirectories are reported as vendored third-party libraries
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:435 (Scanner::library_candidates), :467-507 (identify_vendored_library)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:435 (Scanner::library_candidates), :467-507 (identify_vendored_library)`
 
 The candidate test is a LICENSE file or a composer.json plus any PHP, applied to every direct child of the plugin root. Authors routinely put a copy of the GPL in a subdirectory they also publish separately, and monorepo-style plugins carry composer.json in their own sub-packages. Every such directory is reported as a component with the evidence string "vendored...", which asserts it is third-party code copied in, and gets a version inferred from the author's own docblocks.
 
@@ -569,8 +533,7 @@ The candidate test is a LICENSE file or a composer.json plus any PHP, applied to
 
 ### 46. PHP diagnostics go to STDOUT, so a redirected CycloneDX document is silently invalid JSON
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:641 (detect_bundled_assets file read); global — the tool never sets display_errors and never suppresses or checks I/O errors`
+**OPEN** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:641 (detect_bundled_assets file read); global — the tool never sets display_errors and never suppresses or checks I/O errors`
 
 PHP CLI's default is display_errors=STDOUT (confirmed: 'display_errors => STDOUT => STDOUT' in php:7.4-cli with no php.ini loaded), and the tool emits its document on stdout, so any warning raised during a scan is interleaved into the JSON.
 
@@ -580,8 +543,7 @@ PHP CLI's default is display_errors=STDOUT (confirmed: 'display_errors => STDOUT
 
 ### 47. A glob metacharacter anywhere in the target path silently disables every glob-based detector
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:219 (read_plugin_header), 427 (library_candidates), 722 (composer_style_vendor_dirs), 762 (find_files), 565/568 (version_search_order)`
+**OPEN** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:219 (read_plugin_header), 427 (library_candidates), 722 (composer_style_vendor_dirs), 762 (find_files), 565/568 (version_search_order)`
 
 Every directory listing is done with glob() on an unescaped concatenation of the user-supplied root, so characters such as [ ] * ? in the path are interpreted as pattern syntax and the listing silently returns the wrong set (usually nothing), while the SPL-based walk() still sees the real files — producing a confident, gap-free report that omits real components.
 
@@ -591,8 +553,7 @@ Every directory listing is done with glob() on an unescaped concatenation of the
 
 ### 48. --diff accepts any JSON object as a CycloneDX document, reporting every component as ADDED
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:1047-1060 (Diff::load)`
+**OPEN** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:1047-1060 (Diff::load)`
 
 load() only rejects input that is not an array, then reads $data['components'] ?? array(); a valid JSON file that is not a CycloneDX document therefore parses as an SBOM with zero components instead of being rejected.
 
@@ -601,12 +562,11 @@ load() only rejects input that is not an array, then reads $data['components'] ?
 **Fix.** Require positive identification before diffing: reject unless $data['bomFormat'] === 'CycloneDX' (or at minimum unless a 'components' key exists), and reuse the existing 'Could not read {$path} as a CycloneDX document.' / exit 2 path. Also skip non-scalar name/version entries instead of casting them.
 
 
-## Low
+## Low. Open.
 
 ### 49. 'Scanned: N files' counts walk iterations, not files, and can be double the true number
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:787 (++$this->files_seen inside Scanner::walk) reported at line 915`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:787 (++$this->files_seen inside Scanner::walk) reported at line 915`
 
 walk() increments files_seen on every yield, and it is called once per contains_php() probe, once per find_version_constant() fallback, and once for detect_bundled_assets(). Files reached by more than one caller are counted more than once, so the header line — the one number a reader uses to sanity-check coverage against their zip — is inflated.
 
@@ -616,8 +576,7 @@ walk() increments files_seen on every yield, and it is called once per contains_
 
 ### 50. --diff never reports the product's own version change, so a release-to-release comparison can report no changes
 
-**Lens:** claims  
-**Location:** `bodholdt-sbom.php:1047-1054 (Diff::load reads only $data['components'])`
+**OPEN** · **Lens:** claims · **Location:** `bodholdt-sbom.php:1047-1054 (Diff::load reads only $data['components'])`
 
 The product itself is written to `metadata.component`, not to `components[]`. Diff::load ignores metadata entirely, so the headline use case in the README ('See what changed between two releases', `--diff sbom-1.4.0.json sbom-1.5.0.json`) reports nothing when the product version is what moved.
 
@@ -627,8 +586,7 @@ The product itself is written to `metadata.component`, not to `components[]`. Di
 
 ### 51. Every licence is emitted as `license.name`, including valid SPDX identifiers and SPDX expressions
 
-**Lens:** cyclonedx  
-**Location:** `bodholdt-sbom.php:864 (CycloneDX::component) — `return array( 'license' => array( 'name' => $l ) );``
+**OPEN** · **Lens:** cyclonedx · **Location:** `bodholdt-sbom.php:864 (CycloneDX::component) — `return array( 'license' => array( 'name' => $l ) );``
 
 CycloneDX 1.6 distinguishes three forms: `license.id` for a valid SPDX identifier, `license.name` for "a commercial or proprietary license or an open source license that may not be defined by SPDX", and a one-element `[{ "expression": ... }]` tuple for an SPDX expression. The tool uses `name` unconditionally, so identifiers it already has verbatim are downgraded to unrecognised custom names, and expressions are stored in a field that cannot express them.
 
@@ -638,8 +596,7 @@ CycloneDX 1.6 distinguishes three forms: `license.id` for a valid SPDX identifie
 
 ### 52. The minified-asset sibling check looks only in the same directory, so the author's own build output is asserted to be third-party code
 
-**Lens:** false-positives  
-**Location:** `bodholdt-sbom.php:683-692 (Scanner::identify_asset)`
+**OPEN** · **Lens:** false-positives · **Location:** `bodholdt-sbom.php:683-692 (Scanner::identify_asset)`
 
 The "is this the author's own build output" test is `is_file($m[1].'.'.$m[2])`, i.e. foo.js next to foo.min.js in the same directory. The standard src/ to dist/ layout, and any hand-written or Sass-compressed .min.css, defeat it. The resulting entry lands under a heading that states "Third party code is present here".
 
@@ -649,8 +606,7 @@ The "is this the author's own build output" test is `is_file($m[1].'.'.$m[2])`, 
 
 ### 53. --output= with an empty value is an uncaught ValueError fatal on PHP 8, but a clean error on 7.4
 
-**Lens:** robustness  
-**Location:** `bodholdt-sbom.php:1175 (emit)`
+**OPEN** · **Lens:** robustness · **Location:** `bodholdt-sbom.php:1175 (emit)`
 
 emit() only checks for null before calling file_put_contents(), so an empty --output value reaches the function; PHP 8.0+ throws ValueError('Path must not be empty') which nothing catches, while PHP 7.4 returns false and the existing error path handles it — the tool's behaviour on bad input differs across the versions it claims to support.
 
