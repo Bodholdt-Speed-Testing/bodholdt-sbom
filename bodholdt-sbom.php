@@ -943,7 +943,7 @@ final class TextReport {
 
 		if ( $dev ) {
 			$out .= "\nBUILD TIME ONLY (" . count( $dev ) . ")\n";
-			$out .= "  Not part of the shipped product, listed for completeness. Use --all to expand.\n";
+			$out .= "  Not part of the shipped product. Listed in the CycloneDX output.\n";
 		}
 
 		if ( $result['notes'] ) {
