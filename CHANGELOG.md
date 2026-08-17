@@ -30,3 +30,11 @@ each one now has a regression test:
   mixing that dependency's private tree into the report and double counting.
 - Component identity included the path, so the same package found by two detectors was reported
   twice.
+
+A fifth was caught by CI, on PHP 7.4 only, which is the reason the version matrix exists:
+
+- The main file carried a shebang. PHP 8 strips a shebang from an included file and PHP 7.4 does
+  not, so including the tool emitted that line as output ahead of its `strict_types` declaration.
+  That is fatal on 7.4, and on any version it would have put a stray line in front of JSON output.
+  The shebang now lives only in `bin/bodholdt-sbom`, and the main file is run as
+  `php bodholdt-sbom.php`.

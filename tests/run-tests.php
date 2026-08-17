@@ -360,6 +360,33 @@ $cmd    = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( TOOL ) . ' ' . es
 $out    = (string) shell_exec( $cmd );
 ok( false !== strpos( $out, 'Not a directory' ), 'a missing target gives a clear message' );
 
+heading( 'REGRESSION: the composer entry point works when included' );
+// Found by CI on PHP 7.4 only. PHP 8 strips a shebang from an included file
+// and 7.4 does not, so a shebang on the main file was emitted as output ahead
+// of its strict_types declaration. Fatal on 7.4, and on any version it would
+// have put a stray line in front of JSON output. The main file therefore has
+// no shebang and bin/bodholdt-sbom carries it instead.
+
+$shim = __DIR__ . '/../bin/bodholdt-sbom';
+ok( is_file( $shim ), 'the composer entry point exists' );
+
+$first = (string) fgets( (function ( $p ) { return fopen( $p, 'r' ); })( TOOL ) );
+ok(
+	0 !== strpos( $first, '#!' ),
+	'the includable file carries no shebang',
+	'first line was: ' . trim( $first )
+);
+
+$dir  = fixture( 'via-shim', array( 'my-plugin.php' => plugin_header( 'Shim Test', '7.7.7' ) ) );
+$cmd  = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $shim ) . ' ' . escapeshellarg( $dir ) . ' --format=cyclonedx 2>&1';
+$out  = (string) shell_exec( $cmd );
+$doc  = json_decode( $out, true );
+ok(
+	is_array( $doc ) && ( $doc['metadata']['component']['name'] ?? null ) === 'Shim Test',
+	'the entry point produces clean output with nothing in front of it',
+	'got: ' . substr( $out, 0, 120 )
+);
+
 /* --- Document shape --------------------------------------------------- */
 
 heading( 'CycloneDX document' );

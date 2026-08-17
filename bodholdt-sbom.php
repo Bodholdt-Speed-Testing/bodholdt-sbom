@@ -1,7 +1,14 @@
-#!/usr/bin/env php
 <?php
 /**
  * Bodholdt SBOM
+ *
+ * Run it as `php bodholdt-sbom.php <directory>`.
+ *
+ * There is deliberately no shebang on this file. PHP 7.4 does not strip a
+ * shebang when a file is included, so it would be emitted as output ahead of
+ * the strict_types declaration below, which is both a fatal error on 7.4 and a
+ * way to corrupt JSON output with a stray line. The executable entry point with
+ * the shebang lives in bin/bodholdt-sbom.
  *
  * Produces a software bill of materials for a WordPress plugin or theme.
  *
